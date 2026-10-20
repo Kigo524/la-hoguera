@@ -6,6 +6,13 @@
    * ========================================================== */
   var fireCanvas = document.getElementById('fire');
   var fctx = fireCanvas.getContext('2d');
+  /* Canvas overlay para las chispas de la línea de corte: va POR ENCIMA del
+     papel (z-index 6) porque el canvas de fuego queda detrás y las ocultaría. */
+  var cutCanvas = document.createElement('canvas');
+  cutCanvas.className = 'cut-sparks';
+  cutCanvas.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(cutCanvas);
+  var cutCtx = cutCanvas.getContext('2d');
   var form = document.getElementById('burn-form');
   var message = document.getElementById('message');
   var burnBtn = document.getElementById('burn-btn');
@@ -42,6 +49,11 @@
   var embers = [];
   var maxEmbers = 190;
   var emberAcc = 0;
+  /* Chispas de la línea de corte (canvas overlay, cap propio independiente). */
+  var cutSparks = [];
+  var maxCutSparks = 80;
+  var cutAcc = 0;
+  var cut = { active: false, rect: null, anim: null };
   var boost = 0;
   var flicker = 1;
   var flickerPhase = 0;
@@ -118,6 +130,10 @@
     fireCanvas.width = Math.round(W * FIRE_DPR);
     fireCanvas.height = Math.round(H * FIRE_DPR);
     fctx.setTransform(FIRE_DPR, 0, 0, FIRE_DPR, 0, 0);
+
+    cutCanvas.width = Math.round(W * FIRE_DPR);
+    cutCanvas.height = Math.round(H * FIRE_DPR);
+    cutCtx.setTransform(FIRE_DPR, 0, 0, FIRE_DPR, 0, 0);
 
     var small = Math.min(W, H) < 700;
     maxEmbers = small ? 90 : 190;
@@ -227,27 +243,73 @@
     });
   }
 
-  function spawnSparks(x, y, n) {
-    var cap = Math.round(maxEmbers * 1.6);
+  function spawnCutSpark(x, y) {
+    if (cutSparks.length >= maxCutSparks) return;
+    cutSparks.push({
+      x: x,
+      y: y,
+      vx: (Math.random() - 0.5) * 50,
+      vy: -(50 + Math.random() * 120),
+      b: 0.5 + Math.random() * 1.2,
+      life: 0,
+      max: 0.5 + Math.random() * 0.9,
+      size: 0.8 + Math.random() * 1.6,
+      phase: Math.random() * Math.PI * 2,
+      sp: (Math.random() * emberSprites.length) | 0
+    });
+  }
+
+  function burstCutSparks(n) {
+    var r = cut.rect;
+    if (!r) return;
     for (var i = 0; i < n; i++) {
-      if (embers.length >= cap) break;
-      var ang = Math.random() * Math.PI * 2;
-      var sp = 60 + Math.random() * 260;
-      var vy = Math.sin(ang) * sp - 120;
-      embers.push({
-        x: x,
-        y: y,
-        vx: Math.cos(ang) * sp,
-        vy: vy,
-        b: 0.6 + Math.random() * 2,
-        life: 0,
-        max: 0.4 + Math.random() * 1.1,
-        size: 1 + Math.random() * 2.4,
-        phase: Math.random() * Math.PI * 2,
-        sp: (Math.random() * emberSprites.length) | 0
-      });
+      spawnCutSpark(r.left + Math.random() * r.width, r.top + r.height);
     }
-    boost = 1;
+  }
+
+  function updateCutSparks(dt) {
+    if (cut.active && cut.anim && cut.rect) {
+      /* La línea de corte sube: y = base + alto × (1 − progreso del clip-path). */
+      var t = cut.anim.currentTime;
+      var p = typeof t === 'number' ? Math.min(1, t / DUR.burn) : 0;
+      var rate = reduceMotion ? 10 : 48;
+      cutAcc += rate * dt;
+      var r = cut.rect;
+      var y = r.top + r.height * (1 - p);
+      while (cutAcc >= 1) {
+        cutAcc -= 1;
+        spawnCutSpark(r.left + Math.random() * r.width, y);
+      }
+    }
+    for (var i = cutSparks.length - 1; i >= 0; i--) {
+      var s = cutSparks[i];
+      s.life += dt;
+      if (s.life >= s.max) {
+        cutSparks.splice(i, 1);
+        continue;
+      }
+      s.vy -= 26 * s.b * dt;
+      s.vx += Math.sin(s.y * 0.03 + s.phase) * 20 * dt;
+      s.vx *= 0.985;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      if (s.y < -20 || s.x < -20 || s.x > W + 20) cutSparks.splice(i, 1);
+    }
+  }
+
+  function drawCutSparks() {
+    cutCtx.clearRect(0, 0, W, H);
+    if (!cutSparks.length) return;
+    cutCtx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < cutSparks.length; i++) {
+      var s = cutSparks[i];
+      var k = 1 - s.life / s.max;
+      var r = s.size * (0.9 + k * 1.6);
+      cutCtx.globalAlpha = k < 0 ? 0 : k * (0.72 + 0.28 * Math.sin(s.phase + s.life * 9));
+      cutCtx.drawImage(emberSprites[s.sp], s.x - r, s.y - r, r * 2, r * 2);
+    }
+    cutCtx.globalAlpha = 1;
+    cutCtx.globalCompositeOperation = 'source-over';
   }
 
   function ambientEmbers(dt) {
@@ -319,6 +381,8 @@
     ambientEmbers(dt);
     updateEmbers(dt);
     drawEmbers();
+    updateCutSparks(dt);
+    drawCutSparks();
 
     if (boost > 0) boost = Math.max(0, boost - dt * 2.2);
   }
@@ -339,159 +403,59 @@
     burnCount.classList.add('bump');
   }
 
-  function fireHeart() {
-    return { x: W / 2, y: H * 0.74 };
-  }
-
-  /* Duraciones V4 (Spec 005): ~2,7 s. Sin rotaciones 3D. */
+  /* Duraciones V5 (Spec 006): arrugado in-place + incineración clip-path.
+     Spec 007: quemado lento y dramático (3,5 s). */
   var DUR = reduceMotion
-    ? { crumple: 220, burnUp: 400 }
-    : { crumple: 700, burnUp: 2000 };
+    ? { crumple: 220, burn: 700 }
+    : { crumple: 700, burn: 3500 };
 
-  function buildPaper(text, rect, cx, cy) {
+  function buildPaper(text, rect, scrollTop) {
+    /* Clon con geometría EXACTA del textarea (ancho, alto y centro idénticos):
+       el papel nace superpuesto sin ningún salto ni desplazamiento inicial. */
     var paper = document.createElement('div');
     paper.className = 'paper';
-    var w = Math.max(180, Math.min(rect.width || 320, 420));
-    paper.style.width = w + 'px';
-    paper.style.left = cx + 'px';
-    paper.style.top = cy + 'px';
+    paper.style.width = rect.width + 'px';
+    paper.style.height = rect.height + 'px';
+    paper.style.left = (rect.left + rect.width / 2) + 'px';
+    paper.style.top = (rect.top + rect.height / 2) + 'px';
 
     var t = document.createElement('div');
     t.className = 'paper__text';
     t.textContent = text;
+    /* Réplica del scroll visible del textarea en el momento del clic. */
+    if (scrollTop) t.style.transform = 'translateY(' + -scrollTop + 'px)';
     paper.appendChild(t);
     return paper;
   }
 
-  function crumpleNoRotFrames() {
-    if (reduceMotion) {
-      return [
-        { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1) brightness(1)', offset: 0 },
-        { transform: 'translate(-50%,-50%) scale(0.9)', filter: 'contrast(1.08) brightness(0.98)', offset: 1 }
-      ];
-    }
-    return [
-      { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1) brightness(1)', offset: 0 },
-      { transform: 'translate(-50%,-50%) scale(0.94)', filter: 'contrast(1.04) brightness(0.99)', offset: 0.4 },
-      { transform: 'translate(-50%,-50%) scale(0.92)', filter: 'contrast(1.06) brightness(0.985)', offset: 0.7 },
-      { transform: 'translate(-50%,-50%) scale(0.9)', filter: 'contrast(1.08) brightness(0.98)', offset: 1 }
-    ];
-  }
-
-  function burnUpFrames() {
-    if (reduceMotion) {
-      return [
-        { '--burn-up': '0%', opacity: 1, offset: 0 },
-        { '--burn-up': '100%', opacity: 0, offset: 1 }
-      ];
-    }
-    return [
-      { '--burn-up': '0%', opacity: 1, offset: 0 },
-      { '--burn-up': '25%', opacity: 1, offset: 0.25 },
-      { '--burn-up': '55%', opacity: 1, offset: 0.5 },
-      { '--burn-up': '80%', opacity: 1, offset: 0.72 },
-      { '--burn-up': '100%', opacity: 0, offset: 1 }
-    ];
-  }
-
-  function flightStraightFrames(cx, cy, end) {
-    var dx = end.x - cx;
-    var dy = end.y - cy;
-    var steps = 6;
-    var frames = [];
-    for (var i = 0; i <= steps; i++) {
-      var t = i / steps;
-      var x = cx + dx * t;
-      var y = cy + dy * t;
-      frames.push({
-        transform: 'translate(-50%,-50%) translate(' + (x - cx).toFixed(1) + 'px,' + (y - cy).toFixed(1) + 'px) scale(0.9)',
-        offset: t
-      });
-    }
-    return frames;
-  }
-
   function crumpleFrames() {
+    if (reduceMotion) {
+      return [
+        { transform: 'translate(-50%,-50%) scale(1)', filter: 'contrast(1) brightness(1)', offset: 0 },
+        { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1.04) brightness(0.99)', offset: 1 }
+      ];
+    }
     return [
-      {
-        transform: 'translate(-50%,-50%) perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.92)',
-        filter: 'brightness(1) contrast(1)',
-        offset: 0
-      },
-      {
-        transform: 'translate(-50%,-50%) perspective(700px) rotateX(-42deg) rotateY(28deg) rotateZ(-8deg) scale(0.72)',
-        filter: 'brightness(0.92) contrast(1.15)',
-        offset: 0.42
-      },
-      {
-        transform: 'translate(-50%,-50%) perspective(700px) rotateX(34deg) rotateY(-34deg) rotateZ(12deg) scale(0.56)',
-        filter: 'brightness(0.86) contrast(1.25)',
-        offset: 0.72
-      },
-      {
-        transform: 'translate(-50%,-50%) perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.5)',
-        filter: 'brightness(0.9) contrast(1.2)',
-        offset: 1
-      }
+      { transform: 'translate(-50%,-50%) scale(1)', filter: 'contrast(1) brightness(1)', offset: 0 },
+      { transform: 'translate(-50%,-50%) scale(0.99)', filter: 'contrast(1.02) brightness(0.995)', offset: 0.45 },
+      { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1.06) brightness(0.99)', offset: 1 }
     ];
   }
 
-  function flightFrames(cx, cy, end) {
-    var dx = end.x - cx;
-    var dy = end.y - cy;
-    var ctrlX = cx + dx * 0.5;
-    var ctrlY = cy + dy * 0.5 - Math.max(60, Math.abs(dy) * 0.35);
-    var steps = 4;
-    var frames = [];
-    for (var i = 0; i <= steps; i++) {
-      var t = i / steps;
-      var mt = 1 - t;
-      var x = mt * mt * cx + 2 * mt * t * ctrlX + t * t * end.x;
-      var y = mt * mt * cy + 2 * mt * t * ctrlY + t * t * end.y;
-      var sc = 0.5 - 0.35 * t;
-      var rot = 320 * t;
-      var arc = Math.sin(t * Math.PI) * 22;
-      frames.push({
-        transform:
-          'translate(-50%,-50%) translate(' + (x - cx).toFixed(1) + 'px,' + (y - cy).toFixed(1) + 'px) ' +
-          'perspective(700px) rotateX(' + arc.toFixed(1) + 'deg) rotateY(' + (arc * 0.6).toFixed(1) + 'deg) ' +
-          'rotateZ(' + rot.toFixed(1) + 'deg) scale(' + sc.toFixed(3) + ')',
-        offset: t
-      });
+  function burnFrames() {
+    /* Ocultación estricta de abajo hacia arriba: inset(bottom) crece 0 → 100%.
+       clip-path es interpolable directamente en WAAPI (sin variables CSS). */
+    var frames = [
+      { bottom: '0%', opacity: 1, offset: 0 },
+      { bottom: '55%', opacity: 1, offset: 0.55 },
+      { bottom: '82%', opacity: 1, offset: 0.82 },
+      { bottom: '100%', opacity: 0, offset: 1 }
+    ];
+    for (var i = 0; i < frames.length; i++) {
+      frames[i].clipPath = frames[i].webkitClipPath = 'inset(0 0 ' + frames[i].bottom + ' 0)';
+      delete frames[i].bottom;
     }
     return frames;
-  }
-
-  function burnFrames(dx, dy) {
-    var base =
-      'translate(-50%,-50%) translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) ' +
-      'perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(320deg)';
-    return [
-      {
-        transform: base + ' scale(0.15)',
-        filter: 'brightness(1) saturate(1)',
-        opacity: 1,
-        offset: 0
-      },
-      {
-        transform: base + ' rotateZ(18deg) scale(0.2)',
-        filter: 'brightness(2.2) saturate(1.5)',
-        opacity: 1,
-        offset: 0.4
-      },
-      {
-        transform: base + ' rotateZ(24deg) scale(0.1)',
-        filter: 'brightness(3) saturate(1.2)',
-        opacity: 0.85,
-        offset: 0.72
-      },
-      {
-        transform: base + ' rotateZ(40deg) scale(0.02)',
-        filter: 'brightness(1) saturate(1)',
-        opacity: 0,
-        offset: 1
-      }
-    ];
   }
 
   async function launch() {
@@ -507,50 +471,44 @@
     burnBtn.disabled = true;
 
     var rect = message.getBoundingClientRect();
-    var cx = rect.left + rect.width / 2;
-    var cy = rect.top + rect.height / 2;
+    var scrollTop = message.scrollTop;
 
     /* El texto deja el campo de inmediato: no se conserva en ningún lado. */
     message.value = '';
 
-    var paper = buildPaper(text, rect, cx, cy);
+    var paper = buildPaper(text, rect, scrollTop);
     flightLayer.appendChild(paper);
 
-    var end = fireHeart();
-    var dx = end.x - cx;
-    var dy = end.y - cy;
-
     try {
-      /* Fase 1: arrugado ligero sin rotaciones 3D. */
-      await paper.animate(crumpleNoRotFrames(), {
+      /* Fase 1: arrugado sutil en el lugar (sin traslación ni salto). */
+      await paper.animate(crumpleFrames(), {
         duration: DUR.crumple,
         easing: 'ease-in-out',
         fill: 'forwards'
       }).finished;
 
-      /* Fase 2: vuelo recto y lento hacia el centro + desaparición de abajo hacia arriba. */
-      paper.classList.add('is-burning-up');
-      /* Emisión moderada de chispas ascendentes al iniciar la fase. */
-      if (!reduceMotion) {
-        spawnSparks(end.x, end.y, 12);
-      } else {
-        spawnSparks(end.x, end.y, 6);
-      }
-
-      var flightAnim = paper.animate(flightStraightFrames(cx, cy, end), {
-        duration: DUR.burnUp,
-        easing: 'linear',
-        fill: 'forwards'
-      });
-      var burnAnim = paper.animate(burnUpFrames(), {
-        duration: DUR.burnUp,
+      /* Fase 2: incineración in-place, ocultación de abajo hacia arriba
+         con clip-path, mientras la línea de corte emite chispas ascendentes. */
+      var burnAnim = paper.animate(burnFrames(), {
+        duration: DUR.burn,
         easing: 'ease-in',
         fill: 'forwards'
       });
-      await Promise.all([flightAnim.finished, burnAnim.finished]);
+      cut.active = true;
+      cut.rect = rect;
+      cut.anim = burnAnim;
+      cutAcc = 0;
+      burstCutSparks(reduceMotion ? 4 : 12);
+      boost = 1;
+
+      await burnAnim.finished;
     } catch (err) {
       /* Animación interrumpida: continuamos con la limpieza. */
     }
+
+    cut.active = false;
+    cut.anim = null;
+    cut.rect = null;
 
     /* Destrucción total: el nodo y su texto salen del DOM. */
     paper.remove();

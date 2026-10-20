@@ -116,7 +116,7 @@ body {
 
 .panel {
   margin-top: auto;
-  width: min(720px, 100%);
+  width: min(860px, 100%);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -143,8 +143,8 @@ body {
 
 .message {
   width: 100%;
-  min-height: 88px;
-  max-height: 32vh;
+  min-height: 150px;
+  max-height: 42vh;
   resize: none;
   border: 0;
   background: transparent;
@@ -245,25 +245,23 @@ body {
 
 .paper {
   position: absolute;
-  padding: 16px 18px;
-  max-height: min(300px, 44vh);
+  /* Geometría y tipografía idénticas al textarea: el clon nace superpuesto sin salto. */
+  padding: 8px 10px;
   overflow: hidden;
   border-radius: 3px;
   background: linear-gradient(140deg, #fbf1dc 0%, #f0dfbf 55%, #dcc79e 100%);
   color: #3c2a15;
   font-family: var(--font-body);
-  font-size: 0.95rem;
-  line-height: 1.45;
+  font-size: 1rem;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  --burn-up: 0%;
   box-shadow:
     0 14px 34px rgba(0, 0, 0, 0.55),
     inset 0 0 34px rgba(120, 80, 30, 0.16);
   transform: translate(-50%, -50%);
   transform-origin: center center;
-  backface-visibility: hidden;
-  will-change: transform, opacity;
+  will-change: transform, opacity, clip-path;
 }
 
 .paper__text {
@@ -282,14 +280,17 @@ body {
   mix-blend-mode: multiply;
 }
 
-/* Desaparición de abajo hacia arriba con mask-image lineal (sin rotaciones) */
-.paper.is-burning-up {
-  -webkit-mask-image: linear-gradient(to top, black 0%, black var(--burn-up), transparent calc(var(--burn-up) + 12%));
-  mask-image: linear-gradient(to top, black 0%, black var(--burn-up), transparent calc(var(--burn-up) + 12%));
-  -webkit-mask-size: 100% 100%;
-  mask-size: 100% 100%;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
+/* Chispas de la línea de corte: canvas overlay POR ENCIMA del papel (z-index 6).
+   El canvas de fuego queda detrás (z-index 1) y ocultaría las chispas. */
+.cut-sparks {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  display: block;
+  pointer-events: none;
 }
 
 /* ---------- Contador de problemas quemados (sesión) ---------- */

@@ -2,18 +2,19 @@
 
 **Regla de Memoria:** Máximo 50 líneas. Resume o elimina lo que ya no aporte valor.
 
-## Estado Actual (V1)
-- SPA estática implementada con HTML, CSS y Vanilla JS.
-- Motor de fuego en Canvas optimizado (DPR 1, renderizado offscreen) corriendo a 60 FPS estables.
-- Efectos CSS (backdrop-filter y sombras dinámicas) balanceados para evitar lag.
-- El ciclo catártico (escribir -> clic -> animación de arrugado/vuelo 3D -> incineración -> destrucción del DOM) funciona correctamente sin persistencia de datos.
-- Contador de sesión sutil en la esquina inferior derecha (icono 🔥 + número) que cuenta los problemas quemados.
+## Estado Actual (V4)
+- SPA estática con HTML, CSS y Vanilla JS (spec `specs/005-destruccion-sin-rotacion.md`).
+- Animación simplificada sin rotaciones 3D: arrugado ligero (solo `scale` + filtro) → vuelo recto y lento hacia el centro mientras desaparece de abajo hacia arriba con `mask-image` lineal (`--burn-up`), con emisión moderada de partículas hacia arriba y `opacity: 0` al final. Total ~2,7 s.
+- Único nodo `.paper` con único `.paper__text` (eliminados mitades/duplicado y artefacto "fantasma").
+- Motor de fuego Canvas a 60 FPS: DPR 1, escala 6/9, paso 40 Hz, paleta crimson→ámbar→blanco, 3 variantes de brasa, flicker, ruido de 2 octavas, viento asimétrico y chispadeo.
+- Contador de sesión (🔥 + número) solo en memoria, aparece tras primer quemado.
 
 ## Aprendizajes y Decisiones Técnicas
-- El evento de envío está blindado exclusivamente al clic; `Enter` solo hace salto de línea.
-- No se requiere base de datos; la destrucción efímera del texto es el núcleo del proyecto.
-- El contador vive solo en memoria (se reinicia al recargar), suma +1 tras `paper.remove()` y guarda únicamente el número, nunca el texto.
+- Envío exclusivo por clic. Cero persistencia. Texto eliminado con `paper.remove()`.
+- Eliminar rotaciones 3D aporta naturalidad. `mask-image` lineal (to top) único para burn-up. Vuelo y desaparición simultáneos.
+- Partículas ascendentes moderadas (burst 10–15, ~1,8x ambiente) durante consumo.
+- Prefijos `-webkit-mask-image` para compatibilidad. `busy` bloquea botón durante toda la secuencia.
 
-## Pruebas E2E
-- Flujo validado en móvil (375px): escribir -> clic en "Lanzar a la hoguera" -> arrugado/vuelo/incineración -> papel fuera del DOM, campo limpio y contador +1. Sin errores ni warnings en consola; sin LocalStorage/SessionStorage/cookies. Captura en `la-hoguera-mobile-375.png`.
-- Nota entorno: el Chrome-for-Testing gestionado por el MCP no está firmado y macOS lo mata (EBADMACHO); se usa el Google Chrome del sistema vía `executablePath`.
+## Pruebas
+- E2E: sin rotaciones, `--burn-up` progresa 0%→100%, máscara lineal activa solo en `.is-burning-up`, único `.paper__text`, papel pasa a `opacity:0` y desaparece. Contador +1, campo limpio, 0 errores/almacenamiento, sin texto fantasma. 
+- Entorno: Chrome del sistema vía `executablePath` (Chrome-for-Testing bloqueado en macOS).

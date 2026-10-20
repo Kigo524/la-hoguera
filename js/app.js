@@ -43,6 +43,9 @@
   var maxEmbers = 190;
   var emberAcc = 0;
   var boost = 0;
+  var flicker = 1;
+  var flickerPhase = 0;
+  var windPhase = 0;
   var last = performance.now();
   var stepAcc = 0;
 
@@ -50,20 +53,25 @@
   var NOISE = new Float32Array(256);
   for (var nInit = 0; nInit < 256; nInit++) NOISE[nInit] = Math.random();
 
-  /* Sprite de brasa pre-renderizado: 1 drawImage por partícula en vez de 2 arc()+fill()+strings. */
-  var emberSprite = buildEmberSprite();
+  /* Tres variantes de brasa pre-renderizadas: 1 drawImage por partícula
+     con color orgánico variado según la temperatura de cada chispa. */
+  var emberSprites = [
+    buildEmberSprite('rgba(255,246,220,1)', 'rgba(255,175,70,0.9)', 'rgba(255,90,0,0)'),
+    buildEmberSprite('rgba(255,220,150,1)', 'rgba(255,140,30,0.85)', 'rgba(255,60,0,0)'),
+    buildEmberSprite('rgba(255,175,85,1)', 'rgba(230,75,10,0.8)', 'rgba(180,25,0,0)')
+  ];
   /* Glow del núcleo pre-renderizado en resize(): evita createRadialGradient() por frame. */
   var coreGlowCanvas = document.createElement('canvas');
 
-  function buildEmberSprite() {
+  function buildEmberSprite(hot, mid, edge) {
     var sprite = document.createElement('canvas');
     sprite.width = 32;
     sprite.height = 32;
     var sctx = sprite.getContext('2d');
     var g = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-    g.addColorStop(0, 'rgba(255,244,214,1)');
-    g.addColorStop(0.35, 'rgba(255,170,60,0.9)');
-    g.addColorStop(1, 'rgba(255,80,0,0)');
+    g.addColorStop(0, hot);
+    g.addColorStop(0.35, mid);
+    g.addColorStop(1, edge);
     sctx.fillStyle = g;
     sctx.fillRect(0, 0, 32, 32);
     return sprite;
@@ -72,13 +80,13 @@
   function buildPalette() {
     var stops = [
       [0.0, 0, 0, 0, 0],
-      [0.08, 30, 4, 0, 30],
-      [0.22, 120, 20, 0, 150],
-      [0.4, 225, 60, 10, 220],
-      [0.58, 255, 96, 20, 250],
-      [0.74, 255, 158, 54, 255],
-      [0.88, 255, 210, 130, 255],
-      [1.0, 255, 248, 226, 255]
+      [0.08, 52, 2, 4, 38],
+      [0.22, 152, 12, 8, 165],
+      [0.4, 242, 48, 6, 228],
+      [0.58, 255, 92, 12, 250],
+      [0.74, 255, 150, 40, 255],
+      [0.88, 255, 208, 120, 255],
+      [1.0, 255, 250, 232, 255]
     ];
     var pal = new Uint8ClampedArray(256 * 4);
     for (var i = 0; i < 256; i++) {
@@ -148,21 +156,32 @@
     var bottom = (bh - 1) * bw;
     var above = (bh - 2) * bw;
 
+    /* Flicker: la hoguera "respira" modulando la inyección de calor base. */
+    flickerPhase = (flickerPhase + 3) & 255;
+    flicker = 0.88 + NOISE[flickerPhase] * 0.24;
+    /* Viento sutil: inclinación orgánica que rota lentamente con el tiempo. */
+    windPhase += 0.017;
+    var wind = Math.sin(windPhase) * 0.18;
+    var wl = 0.25 - wind * 0.5;
+    var wr = 0.25 + wind * 0.5;
+
     for (x = 0; x < bw; x++) {
       var env = 0.42 + 0.58 * Math.sin(Math.PI * (x / bw));
-      heat[bottom + x] = Math.min(255, (190 + Math.random() * 65) * env + boost * 60);
-      heat[above + x] = Math.min(255, (150 + Math.random() * 70) * env + boost * 30);
+      heat[bottom + x] = Math.min(255, (190 + Math.random() * 65) * env * flicker + boost * 60);
+      heat[above + x] = Math.min(255, (150 + Math.random() * 70) * env * flicker + boost * 30);
     }
 
     for (y = bh - 2; y >= 0; y--) {
       var row = y * bw;
       var below = (y + 1) * bw;
       var y7 = y * 7;
+      var yh = y >> 1;
       for (x = 0; x < bw; x++) {
         var xl = x > 0 ? x - 1 : x;
         var xr = x < bw - 1 ? x + 1 : x;
-        var v = (heat[below + xl] + heat[below + x] * 2 + heat[below + xr]) * 0.25;
-        var n = NOISE[(x + y7) & 255];
+        var v = heat[below + xl] * wl + heat[below + x] * 0.5 + heat[below + xr] * wr;
+        /* Dos octavas de ruido: lenguas de fuego coherentes, no grano por peldaño. */
+        var n = NOISE[(x + y7) & 255] * 0.65 + NOISE[((x >> 1) + yh * 3) & 255] * 0.35;
         v -= cooling * (0.7 + n * 0.6);
         if (n > 0.96) v += (NOISE[(x * 5 + y) & 255] - 0.5) * 44;
         heat[row + x] = v < 0 ? 0 : v;
@@ -203,7 +222,8 @@
       life: 0,
       max: (0.8 + Math.random() * 1.8) / power,
       size: 0.8 + Math.random() * 1.8,
-      phase: Math.random() * Math.PI * 2
+      phase: Math.random() * Math.PI * 2,
+      sp: (Math.random() * emberSprites.length) | 0
     });
   }
 
@@ -213,16 +233,18 @@
       if (embers.length >= cap) break;
       var ang = Math.random() * Math.PI * 2;
       var sp = 60 + Math.random() * 260;
+      var vy = Math.sin(ang) * sp - 120;
       embers.push({
         x: x,
         y: y,
         vx: Math.cos(ang) * sp,
-        vy: Math.sin(ang) * sp - 120,
+        vy: vy,
         b: 0.6 + Math.random() * 2,
         life: 0,
         max: 0.4 + Math.random() * 1.1,
         size: 1 + Math.random() * 2.4,
-        phase: Math.random() * Math.PI * 2
+        phase: Math.random() * Math.PI * 2,
+        sp: (Math.random() * emberSprites.length) | 0
       });
     }
     boost = 1;
@@ -261,8 +283,9 @@
       var e = embers[i];
       var k = 1 - e.life / e.max;
       var r = e.size * (0.9 + k * 1.6);
-      fctx.globalAlpha = k < 0 ? 0 : k * 0.9;
-      fctx.drawImage(emberSprite, e.x - r, e.y - r, r * 2, r * 2);
+      /* Chispadeo orgánico: una sin por partícula modula su alfa. */
+      fctx.globalAlpha = k < 0 ? 0 : k * (0.72 + 0.28 * Math.sin(e.phase + e.life * 9));
+      fctx.drawImage(emberSprites[e.sp], e.x - r, e.y - r, r * 2, r * 2);
     }
     fctx.globalAlpha = 1;
     fctx.globalCompositeOperation = 'source-over';
@@ -270,7 +293,7 @@
 
   function drawCoreGlow() {
     fctx.globalCompositeOperation = 'lighter';
-    fctx.globalAlpha = 0.22 + boost * 0.5;
+    fctx.globalAlpha = (0.22 + boost * 0.5) * flicker;
     fctx.drawImage(coreGlowCanvas, 0, 0, W, H);
     fctx.globalAlpha = 1;
     fctx.globalCompositeOperation = 'source-over';
@@ -320,21 +343,78 @@
     return { x: W / 2, y: H * 0.74 };
   }
 
+  /* Duraciones V4 (Spec 005): ~2,7 s. Sin rotaciones 3D. */
+  var DUR = reduceMotion
+    ? { crumple: 220, burnUp: 400 }
+    : { crumple: 700, burnUp: 2000 };
+
   function buildPaper(text, rect, cx, cy) {
     var paper = document.createElement('div');
     paper.className = 'paper';
-    paper.textContent = text;
     var w = Math.max(180, Math.min(rect.width || 320, 420));
     paper.style.width = w + 'px';
     paper.style.left = cx + 'px';
     paper.style.top = cy + 'px';
+
+    var t = document.createElement('div');
+    t.className = 'paper__text';
+    t.textContent = text;
+    paper.appendChild(t);
     return paper;
+  }
+
+  function crumpleNoRotFrames() {
+    if (reduceMotion) {
+      return [
+        { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1) brightness(1)', offset: 0 },
+        { transform: 'translate(-50%,-50%) scale(0.9)', filter: 'contrast(1.08) brightness(0.98)', offset: 1 }
+      ];
+    }
+    return [
+      { transform: 'translate(-50%,-50%) scale(0.98)', filter: 'contrast(1) brightness(1)', offset: 0 },
+      { transform: 'translate(-50%,-50%) scale(0.94)', filter: 'contrast(1.04) brightness(0.99)', offset: 0.4 },
+      { transform: 'translate(-50%,-50%) scale(0.92)', filter: 'contrast(1.06) brightness(0.985)', offset: 0.7 },
+      { transform: 'translate(-50%,-50%) scale(0.9)', filter: 'contrast(1.08) brightness(0.98)', offset: 1 }
+    ];
+  }
+
+  function burnUpFrames() {
+    if (reduceMotion) {
+      return [
+        { '--burn-up': '0%', opacity: 1, offset: 0 },
+        { '--burn-up': '100%', opacity: 0, offset: 1 }
+      ];
+    }
+    return [
+      { '--burn-up': '0%', opacity: 1, offset: 0 },
+      { '--burn-up': '25%', opacity: 1, offset: 0.25 },
+      { '--burn-up': '55%', opacity: 1, offset: 0.5 },
+      { '--burn-up': '80%', opacity: 1, offset: 0.72 },
+      { '--burn-up': '100%', opacity: 0, offset: 1 }
+    ];
+  }
+
+  function flightStraightFrames(cx, cy, end) {
+    var dx = end.x - cx;
+    var dy = end.y - cy;
+    var steps = 6;
+    var frames = [];
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps;
+      var x = cx + dx * t;
+      var y = cy + dy * t;
+      frames.push({
+        transform: 'translate(-50%,-50%) translate(' + (x - cx).toFixed(1) + 'px,' + (y - cy).toFixed(1) + 'px) scale(0.9)',
+        offset: t
+      });
+    }
+    return frames;
   }
 
   function crumpleFrames() {
     return [
       {
-        transform: 'translate(-50%,-50%) perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1)',
+        transform: 'translate(-50%,-50%) perspective(700px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(0.92)',
         filter: 'brightness(1) contrast(1)',
         offset: 0
       },
@@ -441,29 +521,33 @@
     var dy = end.y - cy;
 
     try {
-      await paper.animate(crumpleFrames(), {
-        duration: reduceMotion ? 220 : 500,
+      /* Fase 1: arrugado ligero sin rotaciones 3D. */
+      await paper.animate(crumpleNoRotFrames(), {
+        duration: DUR.crumple,
         easing: 'ease-in-out',
         fill: 'forwards'
       }).finished;
 
-      await paper.animate(flightFrames(cx, cy, end), {
-        duration: reduceMotion ? 320 : 820,
-        easing: 'cubic-bezier(.45,.02,.85,.5)',
+      /* Fase 2: vuelo recto y lento hacia el centro + desaparición de abajo hacia arriba. */
+      paper.classList.add('is-burning-up');
+      /* Emisión moderada de chispas ascendentes al iniciar la fase. */
+      if (!reduceMotion) {
+        spawnSparks(end.x, end.y, 12);
+      } else {
+        spawnSparks(end.x, end.y, 6);
+      }
+
+      var flightAnim = paper.animate(flightStraightFrames(cx, cy, end), {
+        duration: DUR.burnUp,
+        easing: 'linear',
         fill: 'forwards'
-      }).finished;
-
-      spawnSparks(end.x, end.y, reduceMotion ? 24 : 90);
-
-      /* El glow incandescente se aplica como estado fijo (un solo repintado),
-         no como box-shadow animado (que repinta en cada frame). */
-      paper.classList.add('is-burning');
-
-      await paper.animate(burnFrames(dx, dy), {
-        duration: reduceMotion ? 300 : 700,
-        easing: 'ease-out',
+      });
+      var burnAnim = paper.animate(burnUpFrames(), {
+        duration: DUR.burnUp,
+        easing: 'ease-in',
         fill: 'forwards'
-      }).finished;
+      });
+      await Promise.all([flightAnim.finished, burnAnim.finished]);
     } catch (err) {
       /* Animación interrumpida: continuamos con la limpieza. */
     }
